@@ -34,3 +34,6 @@ fleets: live inventory, CVE awareness, fast fleet queries. Written in Rust.
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
     cargo deny check
+
+## Gotchas
+- Create crates with `cargo new --vcs none` to avoid nested git repos.
