@@ -9,3 +9,6 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+traysis-proto = { version = "0.1.0", path = "../proto" }
