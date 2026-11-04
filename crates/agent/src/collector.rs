@@ -16,6 +16,9 @@ use std::io;
 
 use traysis_proto::inventory::{HostOs, SoftwareItem};
 
+#[cfg(target_os = "linux")]
+pub mod linux;
+
 /// Why a collection attempt failed.
 #[derive(Debug)]
 #[non_exhaustive]
