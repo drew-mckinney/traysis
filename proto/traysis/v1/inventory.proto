@@ -1,0 +1,155 @@
+// Software inventory messages: the public, cross-language wire contract.
+//
+// Evolution rules (apply to every file in this package):
+//   * Never reuse a field number. When a field is removed, add its number and
+//     name to a `reserved` statement.
+//   * Every enum has an `*_UNSPECIFIED = 0` value. Receivers reject it.
+//   * `optional` is used wherever "missing" differs from "empty".
+//   * Receivers treat all decoded data as untrusted; the Rust crate converts
+//     it into validated domain types (see docs/protocol.md).
+syntax = "proto3";
+
+package traysis.v1;
+
+// Where a package came from.
+enum PackageSource {
+  // Never valid on the wire.
+  PACKAGE_SOURCE_UNSPECIFIED = 0;
+  // Debian dpkg.
+  PACKAGE_SOURCE_DPKG = 1;
+  // RPM.
+  PACKAGE_SOURCE_RPM = 2;
+  // Alpine apk.
+  PACKAGE_SOURCE_APK = 3;
+  // Arch pacman.
+  PACKAGE_SOURCE_PACMAN = 4;
+  // Homebrew.
+  PACKAGE_SOURCE_BREW = 5;
+  // Any other source; the name is in the sibling `other_source` field.
+  // Numbers 6..98 are left for future named sources.
+  PACKAGE_SOURCE_OTHER = 99;
+}
+
+// Whether the server applied a delta.
+enum AckOutcome {
+  // Never valid on the wire.
+  ACK_OUTCOME_UNSPECIFIED = 0;
+  // The delta was applied.
+  ACK_OUTCOME_APPLIED = 1;
+  // Same epoch and seq <= last applied; safe to treat as success.
+  ACK_OUTCOME_DUPLICATE = 2;
+  // The agent must send a full snapshot; `DeltaAck.resync_reason` says why.
+  ACK_OUTCOME_NEED_RESYNC = 3;
+}
+
+// Why the server wants a resync.
+enum ResyncReason {
+  // "No reason". Required when the outcome is not NEED_RESYNC, and rejected
+  // when it is.
+  RESYNC_REASON_UNSPECIFIED = 0;
+  // The post-apply digest did not match.
+  RESYNC_REASON_DIGEST_MISMATCH = 1;
+  // A delta was skipped.
+  RESYNC_REASON_SEQ_GAP = 2;
+  // The agent's epoch is not the current one.
+  RESYNC_REASON_EPOCH_STALE = 3;
+  // The server has no state for this host.
+  RESYNC_REASON_STATE_UNKNOWN = 4;
+}
+
+// The source package a binary package was built from (dpkg `Source:`, rpm
+// `SOURCERPM`).
+message SourcePackage {
+  // Source package name. Required, non-empty.
+  string name = 1;
+  // Source package version. Absent differs from empty.
+  optional string version = 2;
+}
+
+// One installed software package.
+message SoftwareItem {
+  // Package name. Required, non-empty.
+  string name = 1;
+  // Package version. Required, non-empty.
+  string version = 2;
+  // Package architecture. Absent differs from empty.
+  optional string arch = 3;
+  // Package source. Must not be UNSPECIFIED.
+  PackageSource source = 4;
+  // Source name when `source` is OTHER; must be non-empty then, and must be
+  // empty for every other source.
+  string other_source = 5;
+  // The source package, when known.
+  optional SourcePackage source_package = 6;
+  // Vendor, informational only. Absent differs from empty.
+  optional string vendor = 7;
+  // Package URL hint. Untrusted; the server computes the real one. Absent
+  // differs from empty.
+  optional string purl = 8;
+}
+
+// Identity of an installed package: (source, name, arch, version).
+message SoftwareKey {
+  // Package source. Must not be UNSPECIFIED.
+  PackageSource source = 1;
+  // Source name when `source` is OTHER; empty otherwise.
+  string other_source = 2;
+  // Package name. Required, non-empty.
+  string name = 3;
+  // Package architecture. Absent differs from empty.
+  optional string arch = 4;
+  // Package version. Required, non-empty.
+  string version = 5;
+}
+
+// Host-level OS release.
+message HostOs {
+  // os-release ID (for example "debian"), or "macos". Required, non-empty.
+  string id = 1;
+  // os-release VERSION_ID, or the macOS product version. Absent differs from
+  // empty.
+  optional string version_id = 2;
+  // Machine architecture. Required, non-empty.
+  string arch = 3;
+}
+
+// An inventory update from one agent. The server applies `removed` first,
+// then `upserted`, atomically.
+message SoftwareDelta {
+  // Schema version of the inventory model. Must fit in 16 bits; this release
+  // accepts only 1.
+  uint32 schema_version = 1;
+  // Host identifier issued at enrollment. Must equal the authenticated
+  // transport identity (checked by the session layer).
+  string host_id = 2;
+  // Server-assigned stream generation; 0 means "unassigned" (full snapshots
+  // only).
+  uint64 epoch = 3;
+  // Monotonic within an epoch; a snapshot that opens an epoch is 0.
+  uint64 seq = 4;
+  // True for a full snapshot that replaces the server's state for the host.
+  bool full = 5;
+  // Host OS. Required when `full`.
+  optional HostOs host_os = 6;
+  // The agent's clock in milliseconds since the Unix epoch. Untrusted and
+  // informational only.
+  uint64 collected_at = 7;
+  // Added or changed packages.
+  repeated SoftwareItem upserted = 8;
+  // Removed packages. Empty on a full snapshot.
+  repeated SoftwareKey removed = 9;
+  // SHA-256 digest of the post-apply inventory. Exactly 32 bytes.
+  bytes state_digest = 10;
+}
+
+// Server response to a SoftwareDelta.
+message DeltaAck {
+  // The epoch now in force; on a handshake, the newly assigned one.
+  uint64 epoch = 1;
+  // The acknowledged sequence number.
+  uint64 seq = 2;
+  // Result. Must not be UNSPECIFIED.
+  AckOutcome outcome = 3;
+  // Set if and only if `outcome` is NEED_RESYNC.
+  ResyncReason resync_reason = 4;
+}

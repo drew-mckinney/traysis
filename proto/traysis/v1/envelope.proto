@@ -1,0 +1,42 @@
+// The top-level message exchanged between agent and server.
+syntax = "proto3";
+
+package traysis.v1;
+
+import "traysis/v1/inventory.proto";
+
+// Application-level keepalive request. Carries nothing; the envelope id
+// correlates it with its Pong.
+message Ping {}
+
+// Response to a Ping; echoes the Ping's envelope id.
+message Pong {}
+
+// One message on a connection.
+//
+// Id rules:
+//   * 0 is invalid.
+//   * A response echoes its request's id (DeltaAck echoes SoftwareDelta,
+//     Pong echoes Ping).
+//   * Each side allocates the ids of the requests it originates, so the two
+//     sides never collide: the agent uses odd ids (1, 3, 5, ...) and the
+//     server uses even ids (2, 4, 6, ...), each stepping by 2 per connection.
+//
+// Field numbers 6..15 (one-byte tags) are kept free for future hot-path
+// messages. Query messages will start at 16.
+message Envelope {
+  // Request/response correlation id. Must not be 0.
+  uint64 id = 1;
+  // The payload. An unset body, or one from a newer peer that this build does
+  // not recognise, is an unsupported-message condition.
+  oneof body {
+    // Agent to server inventory update.
+    SoftwareDelta delta = 2;
+    // Server to agent response to a delta.
+    DeltaAck delta_ack = 3;
+    // Keepalive request, either direction.
+    Ping ping = 4;
+    // Keepalive response, either direction.
+    Pong pong = 5;
+  }
+}
