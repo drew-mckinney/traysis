@@ -37,3 +37,10 @@ fleets: live inventory, CVE awareness, fast fleet queries. Written in Rust.
 
 ## Gotchas
 - Create crates with `cargo new --vcs none` to avoid nested git repos.
+
+## Cross-platform checks
+- Anything gated with `cfg(target_os = "linux")` needs its test-only imports
+  gated the same way. Otherwise the unused imports fail clippy on macOS.
+- Before every PR we also run this (after `rustup target add aarch64-apple-darwin`):
+
+      cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warnings
