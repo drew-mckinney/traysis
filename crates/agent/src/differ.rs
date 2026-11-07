@@ -216,10 +216,14 @@ pub fn diff(
 
 #[cfg(test)]
 mod tests {
-    use traysis_proto::inventory::{AckOutcome, DeltaAck, MAX_ITEMS, PackageSource, SourcePackage};
+    #[cfg(target_os = "linux")]
+    use traysis_proto::inventory::{AckOutcome, DeltaAck};
+    use traysis_proto::inventory::{MAX_ITEMS, PackageSource, SourcePackage};
 
     use super::*;
+    #[cfg(target_os = "linux")]
     use crate::state::{StateError, StateStore, commit};
+    #[cfg(target_os = "linux")]
     use crate::testutil::TempDir;
 
     // The first test: the real machine's inventory, collected twice, must
