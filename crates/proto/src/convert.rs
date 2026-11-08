@@ -1022,6 +1022,13 @@ mod tests {
         );
 
         let mut d = valid_wire_delta();
+        d.upserted[0].name = "openssl\0evil".to_owned();
+        assert_eq!(
+            SoftwareDelta::try_from(d),
+            Err(WireError::Invalid(ValidationError::NulByte("name")))
+        );
+
+        let mut d = valid_wire_delta();
         d.full = true;
         d.host_os = None;
         d.epoch = 0;
