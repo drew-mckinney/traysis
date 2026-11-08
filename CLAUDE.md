@@ -43,4 +43,8 @@ fleets: live inventory, CVE awareness, fast fleet queries. Written in Rust.
   gated the same way. Otherwise the unused imports fail clippy on macOS.
 - Before every PR we also run this (after `rustup target add aarch64-apple-darwin`):
 
-      cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warnings
+      cargo clippy --workspace --exclude traysis-server --all-targets --target aarch64-apple-darwin -- -D warnings
+
+  `traysis-server` is excluded because its bundled SQLite compiles C code for
+  the target, which fails when cross-checking from Linux without a macOS C
+  toolchain. CI's native macOS leg builds and lints the server crate.

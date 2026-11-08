@@ -68,6 +68,7 @@ applies, in order:
 | no recognized body | `UnsupportedMessage` |
 | any enum is `*_UNSPECIFIED` | `UnspecifiedEnum` |
 | any enum number unknown to this build | `UnknownEnum` |
+| a string field contains a NUL byte | `Invalid` (`NulByte`) |
 | `source` is `OTHER` with empty `other_source` | `OtherSourceEmpty` |
 | `source` is not `OTHER` with nonempty `other_source` | `StraySourceName` |
 | outcome `NEED_RESYNC` without a reason | `ResyncReasonMissing` |
@@ -87,6 +88,13 @@ Error messages name fields and numbers only; they never echo payload contents.
   and only if the outcome is `NEED_RESYNC`.
 - `collected_at` is `uint64` milliseconds since the Unix epoch, matching
   `UnixMillis(u64)`. It is the agent's clock, untrusted and informational.
+
+### Strings
+
+No string field may contain a NUL byte (`ValidationError::NulByte`, reported as
+`Invalid`). Consumers that truncate at NUL would otherwise read
+`openssl\0evil` as `openssl`. This was added in the server-apply PR; the
+digest vectors and the golden file are unchanged because they contain no NUL.
 
 ### Identity binding
 
@@ -124,6 +132,13 @@ file's tests (produced by an independent implementation). A standalone
 cross-language digest document does not exist yet. The digest is computed
 from domain values, so unknown wire fields and the wire encoding never affect
 it.
+
+## Server apply
+
+How the server applies a delta (handshake, duplicates, gaps, digest
+verification, acks on non-`Applied` outcomes, and the rule that a full snapshot
+must carry epoch 0) is specified in `docs/server.md`. An incremental delta that
+carries `host_os` updates the host's stored OS.
 
 ## Framing
 

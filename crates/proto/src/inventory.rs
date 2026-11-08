@@ -34,6 +34,13 @@
 //! rejects any other `seq` on an unassigned epoch. The server ignores the
 //! agent's value and applies the snapshot as `seq = 0` of the epoch it issues.
 //!
+//! # NUL bytes
+//!
+//! [`SoftwareDelta::validate`] rejects a NUL byte in every string field
+//! ([`ValidationError::NulByte`]). Downstream consumers (C APIs, SQL string
+//! functions, log tooling) may truncate at NUL, so a name like
+//! `openssl\0evil` would display or match as `openssl`.
+//!
 //! # Clocks
 //!
 //! `collected_at` is the agent's clock and is untrusted and informational
@@ -241,6 +248,8 @@ pub enum ValidationError {
     UnassignedEpochOnIncremental,
     MissingHostOs,
     FullSnapshotWithRemovals,
+    /// A string field contains a NUL byte.
+    NulByte(&'static str),
 }
 
 impl fmt::Display for ValidationError {
@@ -261,6 +270,7 @@ impl fmt::Display for ValidationError {
             }
             Self::MissingHostOs => f.write_str("full snapshot requires `host_os`"),
             Self::FullSnapshotWithRemovals => f.write_str("full snapshot must not carry `removed`"),
+            Self::NulByte(n) => write!(f, "field `{n}` contains a NUL byte"),
         }
     }
 }
@@ -273,6 +283,9 @@ fn check_str(name: &'static str, s: &str, required: bool) -> Result<(), Validati
     }
     if s.len() > MAX_STRING_LEN {
         return Err(ValidationError::StringTooLong(name));
+    }
+    if s.as_bytes().contains(&0) {
+        return Err(ValidationError::NulByte(name));
     }
     Ok(())
 }
@@ -352,8 +365,8 @@ impl SoftwareDelta {
     /// Returns the first violated invariant: unsupported schema, empty or
     /// oversized fields, too many entries or total cost, duplicate keys, a key
     /// both removed and upserted, an unassigned epoch on an incremental delta
-    /// or with `seq != 0`, or a full snapshot without `host_os` or with
-    /// removals.
+    /// or with `seq != 0`, a full snapshot without `host_os` or with
+    /// removals, or a NUL byte in any string field.
     pub fn validate(&self) -> Result<(), ValidationError> {
         if self.schema_version != SCHEMA_VERSION {
             return Err(ValidationError::UnsupportedSchema(self.schema_version));
@@ -491,6 +504,9 @@ pub fn state_digest(items: &[SoftwareItem]) -> Result<[u8; 32], ValidationError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type Edit = fn(&mut SoftwareItem, String);
+    type KeyEdit = fn(&mut SoftwareKey, String);
 
     fn item(name: &str, version: &str) -> SoftwareItem {
         SoftwareItem {
@@ -643,6 +659,103 @@ mod tests {
         assert_eq!(
             d.validate(),
             Err(ValidationError::KeyBothRemovedAndUpserted)
+        );
+    }
+
+    #[test]
+    fn rejects_nul_in_every_string_field() {
+        let nul = |s: &str| format!("{s}\0x");
+        let check = |d: SoftwareDelta, field: &'static str| {
+            assert_eq!(
+                d.validate(),
+                Err(ValidationError::NulByte(field)),
+                "{field}"
+            );
+        };
+
+        let mut d = incremental();
+        d.host_id = HostId(nul("h"));
+        check(d, "host_id");
+
+        // Full-snapshot cases: host_os fields.
+        for (field, edit) in [
+            ("host_os.id", 0),
+            ("host_os.version_id", 1),
+            ("host_os.arch", 2),
+        ] {
+            let mut d = full_delta(vec![]);
+            if let Some(os) = d.host_os.as_mut() {
+                match edit {
+                    0 => os.id = nul("debian"),
+                    1 => os.version_id = Some(nul("12")),
+                    _ => os.arch = nul("x86_64"),
+                }
+            }
+            check(d, field);
+        }
+
+        // Item fields (upserted).
+        let item_cases: [(&'static str, Edit); 8] = [
+            ("name", |i, v| i.name = v),
+            ("version", |i, v| i.version = v),
+            ("arch", |i, v| i.arch = Some(v)),
+            ("vendor", |i, v| i.vendor = Some(v)),
+            ("purl", |i, v| i.purl = Some(v)),
+            ("source", |i, v| i.source = PackageSource::Other(v)),
+            ("source_package.name", |i, v| {
+                i.source_package = Some(SourcePackage {
+                    name: v,
+                    version: None,
+                });
+            }),
+            ("source_package.version", |i, v| {
+                i.source_package = Some(SourcePackage {
+                    name: "s".to_owned(),
+                    version: Some(v),
+                });
+            }),
+        ];
+        for (field, edit) in item_cases {
+            let mut it = item("a", "1");
+            edit(&mut it, nul("v"));
+            let mut d = incremental();
+            d.upserted = vec![it];
+            check(d, field);
+        }
+
+        // Key fields (removed).
+        let key_cases: [(&'static str, KeyEdit); 4] = [
+            ("name", |k, v| k.name = v),
+            ("version", |k, v| k.version = v),
+            ("arch", |k, v| k.arch = Some(v)),
+            ("source", |k, v| k.source = PackageSource::Other(v)),
+        ];
+        for (field, edit) in key_cases {
+            let mut k = item("a", "1").key();
+            edit(&mut k, nul("v"));
+            let mut d = incremental();
+            d.removed = vec![k];
+            check(d, field);
+        }
+    }
+
+    #[test]
+    fn nul_error_does_not_echo_contents() {
+        let mut d = incremental();
+        d.upserted = vec![item("openssl\0evil", "1")];
+        let msg = d.validate().map_err(|e| e.to_string());
+        assert_eq!(msg, Err("field `name` contains a NUL byte".to_owned()));
+    }
+
+    #[test]
+    fn digest_of_nul_free_inventory_unchanged_by_nul_rule() {
+        // The existing hex vectors above still pass; this pins that a NUL-free
+        // item set validates and digests as before.
+        let d = full_delta(vec![item("ab", "1")]);
+        assert_eq!(d.validate(), Ok(()));
+        assert_eq!(
+            hex(state_digest(&d.upserted).unwrap()),
+            "aaafebc3fa54ac7f1d95c5cbdf26bde734ba323ffb8f7f35a1dc6529a1435dfc"
         );
     }
 
